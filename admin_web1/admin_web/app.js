@@ -15,6 +15,7 @@ let currentView = 'inicio';
 let notificaciones = [];
 let notificacionesNoLeidas = 0;
 let intervalNotificaciones = null;
+let realtimeChannel = null; // NUEVO: Variable para controlar el canal
 
 // Inicialización al cargar el DOM
 document.addEventListener('DOMContentLoaded', async () => {
@@ -60,6 +61,13 @@ async function validarRolAdmin(userId) {
 // Función para cerrar sesión
 window.cerrarSesion = async function() {
     if (intervalNotificaciones) clearInterval(intervalNotificaciones);
+    
+    // NUEVO: Limpiar canal de realtime
+    if (realtimeChannel) {
+        realtimeChannel.unsubscribe();
+        realtimeChannel = null;
+    }
+    
     await supabaseClient.auth.signOut();
     currentUser = null;
     mostrarLogin();
@@ -328,77 +336,84 @@ window.marcarNotificacionLeida = async function(id) {
 };
 
 function iniciarEscuchaNotificaciones() {
-    // Listener existente para notificaciones
-    supabaseClient
-        .channel('notificaciones_admin')
-        .on(
-            'postgres_changes',
-            {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'notificacion',
-                filter: `id_usuario=eq.${currentUser.id_usuario}`
-            },
-            (payload) => {
-                mostrarToast(payload.new.titulo, payload.new.mensaje);
-                actualizarNotificaciones();
-            }
-        )
-        .subscribe();
+    // NUEVO: Si ya existe un canal, limpiarlo primero
+    if (realtimeChannel) {
+        realtimeChannel.unsubscribe();
+        realtimeChannel = null;
+    }
     
-    // NUEVO: Listener para nuevos pedidos
-    supabaseClient
-        .channel('pedidos_realtime')
-        .on(
-            'postgres_changes',
-            {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'pedido'
-            },
-            async (payload) => {
-                console.log('🛍️ Nuevo pedido detectado:', payload.new);
-                actualizarNotificaciones();
-                
-                // Obtener información del cliente para el mensaje
-                const { data: cliente } = await supabaseClient
-                    .from('usuario')
-                    .select('nombre')
-                    .eq('id_usuario', payload.new.id_usuario)
-                    .single();
-                
-                const mensaje = `Nuevo pedido de ${cliente?.nombre || 'Cliente'} por $${payload.new.total.toFixed(2)}`;
-                mostrarToast('Nuevo Pedido', mensaje);
-            }
-        )
-        .subscribe();
+    // Crear un único canal con todos los listeners
+    realtimeChannel = supabaseClient.channel('realtime_admin');
     
-    // NUEVO: Listener para nuevas solicitudes de crédito
-    supabaseClient
-        .channel('creditos_realtime')
-        .on(
-            'postgres_changes',
-            {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'solicitud_credito'
-            },
-            async (payload) => {
-                console.log('💳 Nueva solicitud de crédito detectada:', payload.new);
-                actualizarNotificaciones();
-                
-                // Obtener información del cliente para el mensaje
-                const { data: cliente } = await supabaseClient
-                    .from('usuario')
-                    .select('nombre')
-                    .eq('id_usuario', payload.new.id_usuario)
-                    .single();
-                
-                const mensaje = `Solicitud de crédito de ${cliente?.nombre || 'Cliente'} por $${payload.new.monto_solicitado.toFixed(2)}`;
-                mostrarToast('Solicitud de Crédito', mensaje);
-            }
-        )
-        .subscribe();
+    // Listener para notificaciones
+    realtimeChannel.on(
+        'postgres_changes',
+        {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notificacion',
+            filter: `id_usuario=eq.${currentUser.id_usuario}`
+        },
+        (payload) => {
+            mostrarToast(payload.new.titulo, payload.new.mensaje);
+            actualizarNotificaciones();
+        }
+    );
+    
+    // Listener para nuevos pedidos
+    realtimeChannel.on(
+        'postgres_changes',
+        {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'pedido'
+        },
+        async (payload) => {
+            console.log('🛍️ Nuevo pedido detectado:', payload.new);
+            actualizarNotificaciones();
+            
+            // Obtener información del cliente para el mensaje
+            const { data: cliente } = await supabaseClient
+                .from('usuario')
+                .select('nombre')
+                .eq('id_usuario', payload.new.id_usuario)
+                .single();
+            
+            const mensaje = `Nuevo pedido de ${cliente?.nombre || 'Cliente'} por $${payload.new.total.toFixed(2)}`;
+            mostrarToast('Nuevo Pedido', mensaje);
+        }
+    );
+    
+    // Listener para nuevas solicitudes de crédito
+    realtimeChannel.on(
+        'postgres_changes',
+        {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'solicitud_credito'
+        },
+        async (payload) => {
+            console.log('💳 Nueva solicitud de crédito detectada:', payload.new);
+            actualizarNotificaciones();
+            
+            // Obtener información del cliente para el mensaje
+            const { data: cliente } = await supabaseClient
+                .from('usuario')
+                .select('nombre')
+                .eq('id_usuario', payload.new.id_usuario)
+                .single();
+            
+            const mensaje = `Solicitud de crédito de ${cliente?.nombre || 'Cliente'} por $${payload.new.monto_solicitado.toFixed(2)}`;
+            mostrarToast('Solicitud de Crédito', mensaje);
+        }
+    );
+    
+    // Suscribirse al canal UNA SOLA VEZ al final
+    realtimeChannel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+            console.log('🔔 Sistema de notificaciones realtime iniciado correctamente');
+        }
+    });
 }
 
 function mostrarToast(titulo, mensaje) {
