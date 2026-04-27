@@ -17,16 +17,23 @@ let timeoutBusqueda = null;
 // ============================================
 // FUNCIÓN PRINCIPAL PARA CARGAR PRODUCTOS
 // ============================================
-async function cargarProductos() {
+async function cargarProductos(opciones = {}) {
     const content = document.getElementById('content');
     
     try {
         content.innerHTML = '<div style="text-align: center; padding: 50px;"><i class="fas fa-spinner fa-spin fa-3x"></i><p>Cargando productos...</p></div>';
         
-        const { data: productos, error } = await supabaseClient
+        let query = supabaseClient
             .from('producto')
             .select('*')
             .order('nombre');
+        
+        // Si viene de la tarjeta "Stock Bajo", filtrar productos con stock < 10
+        if (opciones.stockBajo) {
+            query = query.lt('stock_actual', 10);
+        }
+        
+        const { data: productos, error } = await query;
         
         if (error) throw error;
         
@@ -1454,3 +1461,28 @@ if (!document.getElementById('productos-estilos')) {
     `;
     document.head.appendChild(estilos);
 }
+// ============================================
+// EXPORTAR FUNCIONES PARA USO GLOBAL
+// ============================================
+window.cargarProductos = cargarProductos;
+window.filtrarProductos = filtrarProductos;
+window.cambiarCategoria = cambiarCategoria;
+window.limpiarBusqueda = limpiarBusqueda;
+window.limpiarFiltros = limpiarFiltros;
+window.mostrarFormularioProducto = mostrarFormularioProducto;
+window.guardarProducto = guardarProducto;
+window.editarProducto = editarProducto;
+window.eliminarProducto = eliminarProducto;
+window.eliminarImagenActual = eliminarImagenActual;
+window.cerrarModalProducto = cerrarModalProducto;
+window.cerrarModalRecorte = cerrarModalRecorte;
+window.aplicarRecorte = aplicarRecorte;
+window.iniciarRecorteImagen = iniciarRecorteImagen;
+window.cerrarModalConfirmacion = function() {
+    const modal = document.getElementById('modalConfirmacionEliminar');
+    if (modal) modal.remove();
+};
+window.cerrarModalConfirmacionImagen = function() {
+    const modal = document.getElementById('modalConfirmacionImagen');
+    if (modal) modal.remove();
+};

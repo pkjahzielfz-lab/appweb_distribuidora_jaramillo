@@ -2,6 +2,11 @@
 // creditos.js - Gestión de créditos (CORREGIDO)
 // ============================================
 
+// ============================================
+// 🆕 VARIABLES PARA BÚSQUEDA DE CRÉDITOS
+// ============================================
+let terminoBusquedaCreditos = '';
+
 // Estilos para mensajes elegantes (insertados directamente)
 const estilosMensajes = `
 <style>
@@ -146,6 +151,29 @@ const estilosMensajes = `
     font-weight: bold;
     color: #1e293b;
 }
+
+/* 🆕 ESTILOS PARA BARRA DE BÚSQUEDA DE CRÉDITOS */
+#searchInputCreditos {
+    width: 100%;
+    padding: 10px 40px 10px 15px;
+    border: 2px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    transition: all 0.3s ease;
+    background-color: white;
+    box-sizing: border-box;
+}
+
+#searchInputCreditos:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+#searchInputCreditos::placeholder {
+    color: #9ca3af;
+}
 </style>
 `;
 
@@ -192,7 +220,6 @@ function mostrarMensaje(titulo, mensaje, tipo = 'exito') {
 
 // Función para mostrar diálogo de confirmación elegante - CORREGIDA
 function mostrarConfirmacion(titulo, mensaje, onConfirmar, onCancelar) {
-    // Crear un ID único para este modal
     const modalId = 'modalConfirmacion_' + Date.now();
     
     const confirmacionDiv = document.createElement('div');
@@ -224,7 +251,6 @@ function mostrarConfirmacion(titulo, mensaje, onConfirmar, onCancelar) {
     
     document.body.appendChild(confirmacionDiv);
     
-    // Agregar event listeners en lugar de onclick inline
     document.getElementById(`cancelBtn_${modalId}`).addEventListener('click', function() {
         confirmacionDiv.remove();
         if (onCancelar && typeof onCancelar === 'function') {
@@ -243,11 +269,83 @@ function mostrarConfirmacion(titulo, mensaje, onConfirmar, onCancelar) {
 // Función para calcular días de plazo según el monto
 function calcularDiasPlazoPorMonto(monto) {
     if (monto <= 10000) {
-        return 20; // Hasta $10,000 -> 20 días
+        return 20;
     } else if (monto <= 100000) {
-        return 30; // $10,001 - $100,000 -> 30 días
+        return 30;
     } else {
-        return 60; // Más de $100,000 -> 60 días
+        return 60;
+    }
+}
+
+// ============================================
+// 🆕 FUNCIÓN PARA FILTRAR CRÉDITOS POR BÚSQUEDA
+// ============================================
+function filtrarCreditosBusqueda(clientes, termino) {
+    if (!termino || termino.trim() === '') {
+        return clientes;
+    }
+    
+    const terminoLower = termino.toLowerCase().trim();
+    
+    return clientes.filter(cliente => {
+        if (cliente.nombre && cliente.nombre.toLowerCase().includes(terminoLower)) return true;
+        if (cliente.email && cliente.email.toLowerCase().includes(terminoLower)) return true;
+        if (String(cliente.credito_limite || 0).includes(terminoLower)) return true;
+        if (String(cliente.credito_saldo || 0).includes(terminoLower)) return true;
+        if (String(cliente.credito_dias_plazo || 0).includes(terminoLower)) return true;
+        
+        const disponible = (cliente.credito_limite || 0) - (cliente.credito_saldo || 0);
+        if (String(disponible).includes(terminoLower)) return true;
+        
+        const tieneCredito = cliente.credito_autorizado === true && (cliente.credito_limite || 0) > 0;
+        const estadoTexto = tieneCredito ? 'crédito activo' : 'sin crédito';
+        if (estadoTexto.includes(terminoLower)) return true;
+        
+        return false;
+    });
+}
+
+// ============================================
+// 🆕 FUNCIONES PARA MANEJAR BÚSQUEDA DE CRÉDITOS
+// ============================================
+function ejecutarBusquedaCreditos() {
+    const searchInput = document.getElementById('searchInputCreditos');
+    if (searchInput) {
+        terminoBusquedaCreditos = searchInput.value;
+        
+        const clearButton = document.getElementById('btnClearSearchCreditos');
+        if (clearButton) {
+            if (terminoBusquedaCreditos.length > 0) {
+                clearButton.style.display = 'block';
+            } else {
+                clearButton.style.display = 'none';
+            }
+        }
+        
+        cargarCreditos();
+    }
+}
+
+function limpiarBusquedaCreditos() {
+    terminoBusquedaCreditos = '';
+    const searchInput = document.getElementById('searchInputCreditos');
+    const clearButton = document.getElementById('btnClearSearchCreditos');
+    
+    if (searchInput) {
+        searchInput.value = '';
+    }
+    
+    if (clearButton) {
+        clearButton.style.display = 'none';
+    }
+    
+    cargarCreditos();
+}
+
+function manejarTeclaEnterCreditos(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        ejecutarBusquedaCreditos();
     }
 }
 
@@ -266,12 +364,10 @@ async function eliminarCreditoCliente(idUsuario, nombreCliente) {
         'El cliente podrá solicitar crédito nuevamente.',
         async function() {
             try {
-                // Verificar que supabaseClient existe
                 if (typeof supabaseClient === 'undefined') {
                     throw new Error('supabaseClient no está definido');
                 }
                 
-                // Poner todos los datos de crédito en cero (incluyendo días de plazo)
                 const { error } = await supabaseClient
                     .from('usuario')
                     .update({
@@ -295,7 +391,6 @@ async function eliminarCreditoCliente(idUsuario, nombreCliente) {
                     'exito'
                 );
                 
-                // Recargar la lista
                 if (typeof cargarCreditos === 'function') {
                     cargarCreditos();
                 }
@@ -348,12 +443,53 @@ async function cargarCreditos() {
         
         if (errorClientes) throw errorClientes;
         
+        // 🆕 Aplicar filtro de búsqueda a clientes
+        const clientesFiltrados = filtrarCreditosBusqueda(clientesCredito || [], terminoBusquedaCreditos);
+        
         const pendientes = solicitudes?.filter(s => s.estado === 'pendiente') || [];
         const aprobadas = solicitudes?.filter(s => s.estado === 'aprobada') || [];
         const rechazadas = solicitudes?.filter(s => s.estado === 'rechazada') || [];
         
-        // MODIFICADO: Ahora son 4 tarjetas: Total, Pendientes, Aprobadas, Rechazadas
         content.innerHTML = `
+            <!-- 🆕 BARRA DE BÚSQUEDA PARA CRÉDITOS -->
+            <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center;">
+                <div style="position: relative; flex: 1; max-width: 400px;">
+                    <input 
+                        type="text" 
+                        id="searchInputCreditos" 
+                        placeholder="Buscar por nombre, email, límite, saldo..."
+                        value="${terminoBusquedaCreditos || ''}"
+                        autocomplete="off"
+                    >
+                    <button 
+                        id="btnClearSearchCreditos" 
+                        onclick="limpiarBusquedaCreditos()"
+                        title="Limpiar búsqueda"
+                        type="button"
+                        style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 14px; padding: 4px; display: ${terminoBusquedaCreditos ? 'block' : 'none'};"
+                    >
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <button 
+                    id="btnBuscarCreditos"
+                    type="button"
+                    onclick="ejecutarBusquedaCreditos()"
+                    style="background-color: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 500; white-space: nowrap;"
+                >
+                    <i class="fas fa-search"></i> Buscar
+                </button>
+            </div>
+            
+            ${terminoBusquedaCreditos ? `
+                <div style="margin-bottom: 15px; color: #6b7280; font-size: 13px;">
+                    <i class="fas fa-filter"></i> Resultados para: "<strong>${terminoBusquedaCreditos}</strong>"
+                    <span style="margin-left: 10px; color: #3b82f6; cursor: pointer;" onclick="limpiarBusquedaCreditos()">
+                        <i class="fas fa-times-circle"></i> Limpiar filtro
+                    </span>
+                </div>
+            ` : ''}
+            
             <div class="credit-summary">
                 <div>
                     <h4>Total Solicitudes</h4>
@@ -469,8 +605,7 @@ async function cargarCreditos() {
             `;
         }
         
-        // MODIFICADO: Los días de plazo ahora muestran 0 cuando no hay crédito
-        // CORRECCIÓN: Se agregó table-layout: fixed y anchos específicos para mantener los botones alineados
+        // 🆕 Tabla de clientes con datos filtrados
         content.innerHTML += `
             <div class="table-container">
                 <div class="table-header">
@@ -479,7 +614,7 @@ async function cargarCreditos() {
                         Clientes
                     </h3>
                 </div>
-                ${clientesCredito.length > 0 ? `
+                ${clientesFiltrados.length > 0 ? `
                     <table class="data-table" style="table-layout: fixed; width: 100%;">
                         <colgroup>
                             <col style="width: 15%;">
@@ -504,10 +639,9 @@ async function cargarCreditos() {
                             </tr>
                         </thead>
                         <tbody>
-                            ${clientesCredito.map(c => {
+                            ${clientesFiltrados.map(c => {
                                 const disponible = (c.credito_limite || 0) - (c.credito_saldo || 0);
                                 const tieneCredito = c.credito_autorizado === true && (c.credito_limite || 0) > 0;
-                                // CORRECCIÓN: Si no tiene crédito, mostrar 0 días
                                 const diasPlazoMostrar = tieneCredito ? (c.credito_dias_plazo || 0) : 0;
                                 return `
                                     <tr>
@@ -543,11 +677,17 @@ async function cargarCreditos() {
                 ` : `
                     <div style="text-align: center; padding: 40px; background: #f9fafb; border-radius: 8px;">
                         <i class="fas fa-users" style="font-size: 48px; color: var(--gray-light); margin-bottom: 16px;"></i>
-                        <p style="color: var(--gray);">No hay clientes registrados</p>
+                        <p style="color: var(--gray);">No hay clientes registrados${terminoBusquedaCreditos ? ` para "${terminoBusquedaCreditos}"` : ''}</p>
                     </div>
                 `}
             </div>
         `;
+        
+        // 🆕 Agregar event listeners para búsqueda
+        const searchInput = document.getElementById('searchInputCreditos');
+        if (searchInput) {
+            searchInput.addEventListener('keypress', manejarTeclaEnterCreditos);
+        }
         
     } catch (error) {
         console.error('Error al cargar créditos:', error);
@@ -882,3 +1022,7 @@ window.eliminarCreditoCliente = eliminarCreditoCliente;
 window.mostrarMensaje = mostrarMensaje;
 window.actualizarDiasPlazoDesdeLimite = actualizarDiasPlazoDesdeLimite;
 window.actualizarDiasPlazoDesdeLimiteEditar = actualizarDiasPlazoDesdeLimiteEditar;
+
+// 🆕 Exportar funciones de búsqueda
+window.ejecutarBusquedaCreditos = ejecutarBusquedaCreditos;
+window.limpiarBusquedaCreditos = limpiarBusquedaCreditos;

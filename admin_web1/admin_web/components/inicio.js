@@ -173,7 +173,7 @@ function inicioContent(stats) {
                 </div>
             </div>
             
-            <div class="stat-card">
+            <div class="stat-card" onclick="cargarVista('productos', { stockBajo: true })" style="cursor: pointer;">
                 <div class="stat-info">
                     <h3>Stock Bajo</h3>
                     <span class="stat-number">${stats.productosStockBajo}</span>

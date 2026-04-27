@@ -5,22 +5,82 @@
 // Variables globales para manejo de selección
 let pedidosSeleccionados = new Set();
 let modoSeleccionActivo = false;
+let canalRealtime = null;
 
 // ============================================
-// FUNCIÓN PARA MOSTRAR TOAST DE NOTIFICACIÓN
+// 🆕 VARIABLES GLOBALES PARA BÚSQUEDA DE PEDIDOS
 // ============================================
-function mostrarToast(mensaje, tipo = 'success') {
-    // Eliminar toast existente si hay uno
+let terminoBusquedaPedidos = '';
+
+// ============================================
+// 🆕 FUNCIÓN PARA INICIAR ESCUCHA EN TIEMPO REAL DE PEDIDOS CANCELADOS
+// ============================================
+function iniciarRealtimePedidos() {
+    console.log('🔄 [REALTIME] Iniciando escucha de pedidos cancelados...');
+    
+    if (canalRealtime) {
+        supabaseClient.removeChannel(canalRealtime);
+    }
+    
+    canalRealtime = supabaseClient
+        .channel('pedidos-cancelados')
+        .on(
+            'postgres_changes',
+            {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'pedido',
+                filter: 'estado=eq.cancelado'
+            },
+            (payload) => {
+                console.log('📢 [REALTIME] Pedido cancelado detectado:', payload.new.id_pedido);
+                mostrarToastPedidos(`⚠️ Pedido #${payload.new.id_pedido} fue cancelado por el cliente`, 'warning');
+                if (typeof currentView !== 'undefined' && currentView === 'pedidos') {
+                    cargarPedidos();
+                }
+            }
+        )
+        .subscribe((status) => {
+            console.log('🔄 [REALTIME] Estado de suscripción:', status);
+        });
+}
+
+// ============================================
+// 🆕 FUNCIÓN PARA ACTUALIZAR BADGE DE NOTIFICACIONES
+// ============================================
+function actualizarBadgePendientes() {
+    const badge = document.getElementById('pedidosPendientesBadge');
+    if (!badge) return;
+    
+    supabaseClient
+        .from('pedido')
+        .select('id_pedido', { count: 'exact', head: true })
+        .eq('estado_admin', 'pendiente_admin')
+        .not('estado', 'eq', 'cancelado')
+        .then(({ count, error }) => {
+            if (!error) {
+                if (count > 0) {
+                    badge.textContent = count;
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        });
+}
+
+// ============================================
+// FUNCIÓN PARA MOSTRAR TOAST DE NOTIFICACIÓN (INTERNA DE PEDIDOS)
+// ============================================
+function mostrarToastPedidos(mensaje, tipo = 'success') {
     const toastExistente = document.querySelector('.toast-notification');
     if (toastExistente) {
         toastExistente.remove();
     }
     
-    // Crear elemento toast
     const toast = document.createElement('div');
     toast.className = `toast-notification toast-${tipo}`;
     
-    // Definir icono según tipo
     const iconos = {
         success: 'fa-check-circle',
         error: 'fa-exclamation-circle',
@@ -42,7 +102,6 @@ function mostrarToast(mensaje, tipo = 'success') {
     
     document.body.appendChild(toast);
     
-    // Auto-cerrar después de 5 segundos
     setTimeout(() => {
         if (toast.parentElement) {
             toast.style.animation = 'slideOut 0.3s ease forwards';
@@ -55,7 +114,6 @@ function mostrarToast(mensaje, tipo = 'success') {
 // FUNCIÓN PARA MOSTRAR MODAL DE MOTIVO DE RECHAZO
 // ============================================
 function mostrarModalMotivoRechazo(idPedido, botonClickeado = null) {
-    // Crear modal para el motivo de rechazo
     const modal = document.createElement('div');
     modal.className = 'modal show';
     modal.id = 'modalMotivoRechazo';
@@ -86,29 +144,23 @@ function mostrarModalMotivoRechazo(idPedido, botonClickeado = null) {
     
     document.body.appendChild(modal);
     
-    // Enfocar el textarea
     setTimeout(() => {
         const textarea = document.getElementById('motivoRechazoInput');
         if (textarea) textarea.focus();
     }, 100);
     
-    // Agregar event listener al botón de confirmar
     document.getElementById('btnConfirmarRechazo').addEventListener('click', async function() {
         const motivo = document.getElementById('motivoRechazoInput').value.trim();
         
         if (!motivo) {
-            mostrarToast('Debe escribir un motivo para rechazar el pedido', 'warning');
+            mostrarToastPedidos('Debe escribir un motivo para rechazar el pedido', 'warning');
             return;
         }
         
-        // Cerrar modal
         modal.remove();
-        
-        // Llamar a la función de rechazar
         rechazarPedido(idPedido, motivo, botonClickeado);
     });
     
-    // Permitir confirmar con Enter (Ctrl+Enter o Cmd+Enter)
     const textarea = document.getElementById('motivoRechazoInput');
     textarea.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -124,12 +176,10 @@ function mostrarModalMotivoRechazo(idPedido, botonClickeado = null) {
 function toggleModoSeleccion() {
     modoSeleccionActivo = !modoSeleccionActivo;
     
-    // Mostrar/ocultar checkboxes
     document.querySelectorAll('.checkbox-pedido, #selectAllCheckbox').forEach(el => {
         el.style.display = modoSeleccionActivo ? 'inline-block' : 'none';
     });
     
-    // Actualizar botón
     const btnEliminar = document.getElementById('btnEliminarSeleccionados');
     if (btnEliminar) {
         if (modoSeleccionActivo) {
@@ -140,7 +190,6 @@ function toggleModoSeleccion() {
             btnEliminar.innerHTML = `<i class="fas fa-trash"></i> Eliminar Seleccionados`;
             btnEliminar.style.backgroundColor = '#dc2626';
             btnEliminar.onclick = toggleModoSeleccion;
-            // Limpiar selección al salir del modo
             pedidosSeleccionados.clear();
             document.querySelectorAll('.checkbox-pedido').forEach(cb => cb.checked = false);
             const selectAll = document.getElementById('selectAllCheckbox');
@@ -148,9 +197,8 @@ function toggleModoSeleccion() {
         }
     }
     
-    // Mostrar toast informativo
     if (modoSeleccionActivo) {
-        mostrarToast('Modo selección activado. Marca los pedidos que deseas eliminar.', 'info');
+        mostrarToastPedidos('Modo selección activado. Marca los pedidos que deseas eliminar.', 'info');
     }
 }
 
@@ -159,13 +207,12 @@ function toggleModoSeleccion() {
 // ============================================
 async function confirmarEliminacionSeleccionados() {
     if (pedidosSeleccionados.size === 0) {
-        mostrarToast('Selecciona al menos un pedido para eliminar', 'warning');
+        mostrarToastPedidos('Selecciona al menos un pedido para eliminar', 'warning');
         return;
     }
     
     const idsPedidos = Array.from(pedidosSeleccionados);
     
-    // Crear modal de confirmación personalizado
     const modal = document.createElement('div');
     modal.className = 'modal show';
     modal.id = 'modalConfirmacionEliminar';
@@ -192,16 +239,12 @@ async function confirmarEliminacionSeleccionados() {
     
     document.body.appendChild(modal);
     
-    // Agregar event listener al botón de confirmar
     document.getElementById('btnConfirmarEliminarSeleccionados').addEventListener('click', async function(e) {
         const btn = this;
-        const contenidoOriginal = btn.innerHTML;
         
-        // Mostrar spinner en el botón
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Eliminando...';
         btn.disabled = true;
         
-        // Deshabilitar botón cancelar
         const btnCancelar = modal.querySelector('.btn-secondary');
         if (btnCancelar) btnCancelar.disabled = true;
         
@@ -214,7 +257,6 @@ async function confirmarEliminacionSeleccionados() {
             
             for (const idPedido of idsPedidos) {
                 try {
-                    // Verificar cuenta por cobrar
                     const { data: cuenta } = await supabaseClient
                         .from('cuentaporcobrar')
                         .select('id_cuenta, saldo_pendiente, id_usuario')
@@ -222,7 +264,6 @@ async function confirmarEliminacionSeleccionados() {
                         .maybeSingle();
                     
                     if (cuenta) {
-                        // Actualizar saldo de crédito
                         const { data: usuario } = await supabaseClient
                             .from('usuario')
                             .select('credito_saldo')
@@ -237,38 +278,32 @@ async function confirmarEliminacionSeleccionados() {
                                 .eq('id_usuario', cuenta.id_usuario);
                         }
                         
-                        // Eliminar pagos asociados
                         await supabaseClient
                             .from('pago')
                             .delete()
                             .eq('id_cuenta', cuenta.id_cuenta);
                         
-                        // Eliminar cuenta
                         await supabaseClient
                             .from('cuentaporcobrar')
                             .delete()
                             .eq('id_pedido', idPedido);
                     }
                     
-                    // Eliminar entregas
                     await supabaseClient
                         .from('entrega')
                         .delete()
                         .eq('id_pedido', idPedido);
                     
-                    // Eliminar notificaciones
                     await supabaseClient
                         .from('notificacion')
                         .delete()
                         .eq('id_referencia', idPedido);
                     
-                    // Eliminar detalles
                     await supabaseClient
                         .from('detalle_pedido')
                         .delete()
                         .eq('id_pedido', idPedido);
                     
-                    // Anular referencias al usuario
                     await supabaseClient
                         .from('pedido')
                         .update({ 
@@ -277,7 +312,6 @@ async function confirmarEliminacionSeleccionados() {
                         })
                         .eq('id_pedido', idPedido);
                     
-                    // Eliminar el pedido
                     const { error } = await supabaseClient
                         .from('pedido')
                         .delete()
@@ -294,17 +328,14 @@ async function confirmarEliminacionSeleccionados() {
                 }
             }
             
-            // Cerrar modal
             modal.remove();
             
-            // Desactivar modo selección
             modoSeleccionActivo = false;
             document.querySelectorAll('.checkbox-pedido, #selectAllCheckbox').forEach(el => {
                 el.style.display = 'none';
             });
             pedidosSeleccionados.clear();
             
-            // Actualizar botón
             const btnEliminar = document.getElementById('btnEliminarSeleccionados');
             if (btnEliminar) {
                 btnEliminar.innerHTML = `<i class="fas fa-trash"></i> Eliminar Seleccionados`;
@@ -312,9 +343,8 @@ async function confirmarEliminacionSeleccionados() {
                 btnEliminar.onclick = toggleModoSeleccion;
             }
             
-            // Mostrar mensajes de resultado
             if (eliminados > 0) {
-                mostrarToast(`✅ ${eliminados} pedido(s) eliminado(s) exitosamente`, 'success');
+                mostrarToastPedidos(`✅ ${eliminados} pedido(s) eliminado(s) exitosamente`, 'success');
             }
             
             if (errores > 0) {
@@ -323,16 +353,15 @@ async function confirmarEliminacionSeleccionados() {
                     console.error('Errores detallados:', mensajesError);
                     mensajeError += `\n${mensajesError[0]}`;
                 }
-                mostrarToast(mensajeError, 'error');
+                mostrarToastPedidos(mensajeError, 'error');
             }
             
-            // Recargar la vista
             cargarPedidos();
             
         } catch (error) {
             console.error('Error general:', error);
             modal.remove();
-            mostrarToast(`Error al eliminar pedidos: ${error.message || 'Error desconocido'}`, 'error');
+            mostrarToastPedidos(`Error al eliminar pedidos: ${error.message || 'Error desconocido'}`, 'error');
         }
     });
 }
@@ -341,7 +370,6 @@ async function confirmarEliminacionSeleccionados() {
 // FUNCIÓN PARA ELIMINAR UN PEDIDO INDIVIDUAL
 // ============================================
 async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
-    // Crear modal de confirmación personalizado
     const modal = document.createElement('div');
     modal.className = 'modal show';
     modal.id = 'modalConfirmacionIndividual';
@@ -368,19 +396,15 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
     
     document.body.appendChild(modal);
     
-    // Agregar event listener al botón de confirmar
     document.getElementById('btnConfirmarEliminarIndividual').addEventListener('click', async function(e) {
         const btn = this;
         
-        // Mostrar spinner en el botón del modal
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Eliminando...';
         btn.disabled = true;
         
-        // Deshabilitar botón cancelar
         const btnCancelar = modal.querySelector('.btn-secondary');
         if (btnCancelar) btnCancelar.disabled = true;
         
-        // Mostrar spinner en el botón original si existe
         if (botonClickeado) {
             mostrarSpinnerEnBoton(botonClickeado);
         }
@@ -388,7 +412,6 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
         try {
             console.log('🗑️ Eliminando pedido individual:', idPedido);
             
-            // PASO 1: Verificar cuenta por cobrar
             const { data: cuenta } = await supabaseClient
                 .from('cuentaporcobrar')
                 .select('id_cuenta, saldo_pendiente, id_usuario')
@@ -413,13 +436,11 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
                     console.log(`✅ Saldo de crédito actualizado: ${nuevoSaldo}`);
                 }
                 
-                // Eliminar pagos asociados a la cuenta
                 await supabaseClient
                     .from('pago')
                     .delete()
                     .eq('id_cuenta', cuenta.id_cuenta);
                 
-                // Eliminar la cuenta por cobrar
                 await supabaseClient
                     .from('cuentaporcobrar')
                     .delete()
@@ -428,28 +449,24 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
                 console.log('✅ Cuenta por cobrar y pagos eliminados');
             }
             
-            // PASO 2: Eliminar entregas asociadas
             await supabaseClient
                 .from('entrega')
                 .delete()
                 .eq('id_pedido', idPedido);
             console.log('✅ Entregas eliminadas');
             
-            // PASO 3: Eliminar notificaciones asociadas
             await supabaseClient
                 .from('notificacion')
                 .delete()
                 .eq('id_referencia', idPedido);
             console.log('✅ Notificaciones eliminadas');
             
-            // PASO 4: Eliminar detalles del pedido
             await supabaseClient
                 .from('detalle_pedido')
                 .delete()
                 .eq('id_pedido', idPedido);
             console.log('✅ Detalles del pedido eliminados');
             
-            // PASO 5: Anular la referencia al usuario
             await supabaseClient
                 .from('pedido')
                 .update({ 
@@ -459,7 +476,6 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
                 .eq('id_pedido', idPedido);
             console.log('✅ Referencias a usuario anuladas');
             
-            // PASO 6: Eliminar el pedido
             const { error } = await supabaseClient
                 .from('pedido')
                 .delete()
@@ -470,11 +486,10 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
                 throw error;
             }
             
-            // Cerrar modal
             modal.remove();
             
             console.log(`✅ Pedido #${idPedido} eliminado completamente`);
-            mostrarToast(`✅ Pedido #${idPedido} eliminado exitosamente`, 'success');
+            mostrarToastPedidos(`✅ Pedido #${idPedido} eliminado exitosamente`, 'success');
             
             pedidosSeleccionados.delete(idPedido);
             cargarPedidos();
@@ -482,10 +497,8 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
         } catch (error) {
             console.error('Error al eliminar pedido:', error);
             
-            // Cerrar modal
             modal.remove();
             
-            // Mostrar mensaje de error detallado
             let mensajeError = `❌ No se pudo eliminar el pedido #${idPedido}.`;
             
             if (error.message) {
@@ -498,7 +511,7 @@ async function eliminarPedidoIndividual(idPedido, botonClickeado = null) {
                 }
             }
             
-            mostrarToast(mensajeError, 'error');
+            mostrarToastPedidos(mensajeError, 'error');
             
             if (botonClickeado) {
                 restaurarBoton(botonClickeado);
@@ -535,7 +548,6 @@ function toggleSeleccionPedido(checkbox) {
         pedidosSeleccionados.delete(idPedido);
     }
     
-    // Actualizar estado del checkbox "Seleccionar todos"
     const checkboxTodos = document.getElementById('selectAllCheckbox');
     if (checkboxTodos) {
         const totalCheckboxes = document.querySelectorAll('.checkbox-pedido').length;
@@ -559,6 +571,76 @@ function actualizarContadorSeleccion() {
 }
 
 // ============================================
+// 🆕 FUNCIÓN PARA FILTRAR PEDIDOS POR BÚSQUEDA
+// ============================================
+function filtrarPedidosBusqueda(pedidos, termino) {
+    if (!termino || termino.trim() === '') {
+        return pedidos;
+    }
+    
+    const terminoLower = termino.toLowerCase().trim();
+    
+    return pedidos.filter(pedido => {
+        if (String(pedido.id_pedido).includes(terminoLower)) return true;
+        if (pedido.usuario?.nombre && pedido.usuario.nombre.toLowerCase().includes(terminoLower)) return true;
+        if (pedido.usuario?.email && pedido.usuario.email.toLowerCase().includes(terminoLower)) return true;
+        
+        const estadoMostrar = pedido.estado === 'cancelado' ? 'Cancelado' : pedido.estado;
+        if (estadoMostrar.toLowerCase().includes(terminoLower)) return true;
+        
+        const metodoPago = pedido.es_credito ? 'crédito' : 'efectivo';
+        if (metodoPago.includes(terminoLower)) return true;
+        if (String(pedido.total).includes(terminoLower)) return true;
+        
+        return false;
+    });
+}
+
+// ============================================
+// 🆕 FUNCIONES PARA MANEJAR BÚSQUEDA DE PEDIDOS
+// ============================================
+function ejecutarBusquedaPedidos() {
+    const searchInput = document.getElementById('searchInputPedidos');
+    if (searchInput) {
+        terminoBusquedaPedidos = searchInput.value;
+        
+        const clearButton = document.getElementById('btnClearSearchPedidos');
+        if (clearButton) {
+            if (terminoBusquedaPedidos.length > 0) {
+                clearButton.style.display = 'block';
+            } else {
+                clearButton.style.display = 'none';
+            }
+        }
+        
+        cargarPedidos();
+    }
+}
+
+function limpiarBusquedaPedidos() {
+    terminoBusquedaPedidos = '';
+    const searchInput = document.getElementById('searchInputPedidos');
+    const clearButton = document.getElementById('btnClearSearchPedidos');
+    
+    if (searchInput) {
+        searchInput.value = '';
+    }
+    
+    if (clearButton) {
+        clearButton.style.display = 'none';
+    }
+    
+    cargarPedidos();
+}
+
+function manejarTeclaEnterPedidos(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        ejecutarBusquedaPedidos();
+    }
+}
+
+// ============================================
 // FUNCIÓN PARA MOSTRAR SPINNER EN BOTÓN
 // ============================================
 function mostrarSpinnerEnBoton(boton) {
@@ -578,10 +660,305 @@ function restaurarBoton(boton) {
     }
 }
 
+// ============================================
+// 🆕 FUNCIÓN PARA MOSTRAR MODAL DE ASIGNACIÓN DE REPARTIDOR
+// ============================================
+async function mostrarModalAsignarRepartidor(idPedido) {
+    try {
+        // Obtener información del pedido
+        const { data: pedido, error: errorPedido } = await supabaseClient
+            .from('pedido')
+            .select(`
+                id_pedido,
+                total,
+                estado,
+                usuario:id_usuario (nombre, direccion, telefono)
+            `)
+            .eq('id_pedido', idPedido)
+            .single();
+        
+        if (errorPedido) throw errorPedido;
+        
+        // Obtener todos los repartidores
+        const { data: repartidores, error: errorRepartidores } = await supabaseClient
+            .from('usuario')
+            .select('id_usuario, nombre, disponible')
+            .eq('rol', 'repartidor')
+            .order('nombre');
+        
+        if (errorRepartidores) throw errorRepartidores;
+        
+        // Obtener el estado actual de cada repartidor basado en sus entregas
+        const repartidoresConEstado = await Promise.all(repartidores.map(async (repartidor) => {
+            // Obtener entregas activas del repartidor (no entregadas ni canceladas)
+            const { data: entregasActivas } = await supabaseClient
+                .from('entrega')
+                .select('id_entrega, estado, id_pedido')
+                .eq('id_repartidor', repartidor.id_usuario)
+                .not('estado', 'in', '("entregada","cancelado")');
+            
+            let estadoRepartidor = 'disponible';
+            let puedeAsignar = true;
+            
+            if (entregasActivas && entregasActivas.length > 0) {
+                // Verificar si tiene entregas en_ruta
+                const tieneEnRuta = entregasActivas.some(e => e.estado === 'en_ruta');
+                
+                if (tieneEnRuta) {
+                    estadoRepartidor = 'en_ruta';
+                    puedeAsignar = false; // No se puede asignar si está en ruta
+                } else {
+                    // Si tiene entregas asignadas
+                    const tieneAsignada = entregasActivas.some(e => 
+                        e.estado === 'asignada'
+                    );
+                    
+                    if (tieneAsignada) {
+                        estadoRepartidor = 'asignada';
+                        puedeAsignar = true; // Se puede asignar aunque tenga otras asignadas
+                    }
+                }
+            }
+            
+            return {
+                ...repartidor,
+                estadoRepartidor,
+                puedeAsignar,
+                entregasActivas: entregasActivas || []
+            };
+        }));
+        
+        // Construir el modal
+        const modal = document.createElement('div');
+        modal.className = 'modal show';
+        modal.id = 'modalAsignarRepartidor';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 700px;">
+                <div class="modal-header">
+                    <h3><i class="fas fa-motorcycle"></i> Asignar Repartidor - Pedido #${idPedido}</h3>
+                    <span class="modal-close" onclick="document.getElementById('modalAsignarRepartidor').remove()">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <div style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #3b82f6;">
+                        <h4 style="margin: 0 0 10px 0; color: #1e3a5f;">📋 Detalles del Pedido</h4>
+                        <p style="margin: 5px 0;"><strong>Cliente:</strong> ${pedido.usuario?.nombre || 'N/A'}</p>
+                        <p style="margin: 5px 0;"><strong>Dirección:</strong> ${pedido.usuario?.direccion || 'N/A'}</p>
+                        <p style="margin: 5px 0;"><strong>Teléfono:</strong> ${pedido.usuario?.telefono || 'N/A'}</p>
+                        <p style="margin: 5px 0;"><strong>Total:</strong> $${(pedido.total || 0).toFixed(2)}</p>
+                    </div>
+                    
+                    <h4 style="margin-bottom: 15px;">🏍️ Repartidores Disponibles</h4>
+                    
+                    ${repartidoresConEstado.length === 0 ? `
+                        <p style="text-align: center; color: #6b7280;">No hay repartidores registrados</p>
+                    ` : `
+                        <div style="max-height: 400px; overflow-y: auto;">
+                            ${repartidoresConEstado.map(rep => {
+                                let badgeColor = '#10b981';
+                                let badgeText = 'Disponible';
+                                let cardStyle = 'border: 2px solid #10b981;';
+                                let asignarDisabled = false;
+                                
+                                if (rep.estadoRepartidor === 'asignada') {
+                                    badgeColor = '#f59e0b';
+                                    badgeText = 'Con Pedidos';
+                                    cardStyle = 'border: 2px solid #f59e0b;';
+                                } else if (rep.estadoRepartidor === 'en_ruta') {
+                                    badgeColor = '#dc2626';
+                                    badgeText = 'En Ruta';
+                                    cardStyle = 'border: 2px solid #dc2626; opacity: 0.7;';
+                                    asignarDisabled = true;
+                                }
+                                
+                                return `
+                                    <div style="${cardStyle} padding: 15px; border-radius: 8px; margin-bottom: 10px; background: white;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                                            <div>
+                                                <strong style="font-size: 16px;">${rep.nombre}</strong>
+                                                <span style="margin-left: 10px; background: ${badgeColor}; color: white; padding: 4px 8px; border-radius: 12px; font-size: 12px;">
+                                                    ${badgeText}
+                                                </span>
+                                                ${rep.entregasActivas.length > 0 ? `
+                                                    <div style="margin-top: 5px; font-size: 13px; color: #6b7280;">
+                                                        <i class="fas fa-box"></i> ${rep.entregasActivas.length} pedido(s) activo(s)
+                                                    </div>
+                                                ` : ''}
+                                            </div>
+                                            <button 
+                                                class="btn btn-primary btn-asignar-repartidor"
+                                                data-repartidor-id="${rep.id_usuario}"
+                                                data-repartidor-nombre="${rep.nombre}"
+                                                ${asignarDisabled ? 'disabled' : ''}
+                                                style="${asignarDisabled ? 'background-color: #9ca3af; cursor: not-allowed;' : 'background-color: #3b82f6;'} color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;"
+                                            >
+                                                <i class="fas fa-check"></i> Asignar
+                                            </button>
+                                        </div>
+                                        ${asignarDisabled ? `
+                                            <p style="margin: 5px 0 0 0; color: #dc2626; font-size: 12px;">
+                                                <i class="fas fa-info-circle"></i> No se puede asignar - Repartidor en ruta
+                                            </p>
+                                        ` : ''}
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `}
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" onclick="document.getElementById('modalAsignarRepartidor').remove()">
+                        Cancelar
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Agregar event listeners a los botones de asignar
+        document.querySelectorAll('.btn-asignar-repartidor').forEach(btn => {
+            btn.addEventListener('click', async function() {
+                const repartidorId = this.dataset.repartidorId;
+                const repartidorNombre = this.dataset.repartidorNombre;
+                
+                // Deshabilitar todos los botones
+                document.querySelectorAll('.btn-asignar-repartidor').forEach(b => {
+                    b.disabled = true;
+                    b.style.opacity = '0.6';
+                });
+                
+                this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Asignando...';
+                
+                await asignarPedidoARepartidor(idPedido, repartidorId, repartidorNombre);
+                
+                modal.remove();
+            });
+        });
+        
+    } catch (error) {
+        console.error('Error al mostrar modal de asignación:', error);
+        mostrarToastPedidos('Error al cargar repartidores: ' + error.message, 'error');
+    }
+}
+
+// ============================================
+// 🆕 FUNCIÓN PARA ASIGNAR PEDIDO A REPARTIDOR ESPECÍFICO (CORREGIDA - CON INDICADOR)
+// ============================================
+async function asignarPedidoARepartidor(idPedido, idRepartidor, nombreRepartidor) {
+    try {
+        console.log(`📦 Asignando pedido #${idPedido} al repartidor ${nombreRepartidor} (ID: ${idRepartidor})`);
+        
+        // Verificar si ya existe una entrega para este pedido
+        const { data: entregaExistente, error: errorConsulta } = await supabaseClient
+            .from('entrega')
+            .select('id_entrega')
+            .eq('id_pedido', idPedido)
+            .maybeSingle();
+        
+        if (errorConsulta) throw errorConsulta;
+        
+        if (entregaExistente) {
+            // Actualizar la entrega existente
+            const { error: errorUpdate } = await supabaseClient
+                .from('entrega')
+                .update({
+                    id_repartidor: idRepartidor,
+                    estado: 'asignada',
+                    fecha_asignacion: new Date().toISOString()
+                })
+                .eq('id_pedido', idPedido);
+            
+            if (errorUpdate) throw errorUpdate;
+            
+            console.log('✅ Entrega actualizada con nuevo repartidor');
+        } else {
+            // Crear nueva entrega
+            const { error: errorInsert } = await supabaseClient
+                .from('entrega')
+                .insert({
+                    id_pedido: parseInt(idPedido),
+                    id_repartidor: idRepartidor,
+                    estado: 'asignada',
+                    fecha_asignacion: new Date().toISOString()
+                });
+            
+            if (errorInsert) throw errorInsert;
+            
+            console.log('✅ Nueva entrega creada');
+        }
+        
+        // 🆕 CAMBIAR EL ESTADO DEL PEDIDO A 'en_proceso' PARA QUE NO APAREZCA EL BOTÓN
+        const { error: errorUpdatePedido } = await supabaseClient
+            .from('pedido')
+            .update({
+                estado: 'en_proceso'
+            })
+            .eq('id_pedido', idPedido);
+        
+        if (errorUpdatePedido) throw errorUpdatePedido;
+        
+        // Notificar SOLO al repartidor asignado
+        const { data: pedido } = await supabaseClient
+            .from('pedido')
+            .select('id_usuario, usuario:id_usuario (nombre)')
+            .eq('id_pedido', idPedido)
+            .single();
+        
+        await supabaseClient
+            .from('notificacion')
+            .insert({
+                id_usuario: idRepartidor,
+                titulo: '📦 Nuevo Pedido Asignado',
+                mensaje: `Se te ha asignado el pedido #${idPedido} del cliente ${pedido?.usuario?.nombre || 'Cliente'}`,
+                tipo: 'pedido_asignado',
+                id_referencia: idPedido
+            });
+        
+        console.log('✅ Notificación enviada al repartidor asignado');
+        
+        mostrarToastPedidos(`✅ Pedido #${idPedido} asignado exitosamente a ${nombreRepartidor}`, 'success');
+        
+        // 🆕 REEMPLAZAR EL BOTÓN DE ASIGNAR POR UN INDICADOR
+        const botonAsignar = document.querySelector(`.btn-asignar[data-id="${idPedido}"]`);
+        if (botonAsignar) {
+            // Crear un span indicador
+            const indicador = document.createElement('span');
+            indicador.style.cssText = `
+                background-color: #10b981;
+                color: white;
+                padding: 4px 8px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 500;
+                margin-left: 5px;
+                display: inline-block;
+            `;
+            indicador.innerHTML = `<i class="fas fa-check-circle"></i> Asignado`;
+            indicador.title = `Asignado a: ${nombreRepartidor}`;
+            
+            // Reemplazar el botón por el indicador
+            botonAsignar.parentNode.replaceChild(indicador, botonAsignar);
+            console.log(`✅ Botón de asignar reemplazado por indicador para pedido #${idPedido}`);
+        }
+        
+        // Actualizar badge
+        actualizarBadgePendientes();
+        
+        // 🆕 NO recargamos todos los pedidos, solo ocultamos el botón
+        // cargarPedidos(); // <- Esto lo comentamos para no recargar toda la tabla
+        
+    } catch (error) {
+        console.error('Error al asignar pedido:', error);
+        mostrarToastPedidos('Error al asignar pedido: ' + error.message, 'error');
+    }
+}
+
+// ============================================
+// FUNCIÓN PARA CARGAR PEDIDOS
+// ============================================
 async function cargarPedidos() {
     const content = document.getElementById('content');
     
-    // Limpiar selección al recargar
     pedidosSeleccionados.clear();
     modoSeleccionActivo = false;
     
@@ -598,9 +975,10 @@ async function cargarPedidos() {
         
         if (error) throw error;
         
-        content.innerHTML = pedidosTemplate(pedidos || []);
+        const pedidosFiltrados = filtrarPedidosBusqueda(pedidos || [], terminoBusquedaPedidos);
         
-        // Agregar event listeners
+        content.innerHTML = pedidosTemplate(pedidosFiltrados);
+        
         document.querySelectorAll('.btn-aprobar').forEach(btn => {
             btn.addEventListener('click', () => {
                 const id = btn.dataset.id;
@@ -629,6 +1007,13 @@ async function cargarPedidos() {
             });
         });
         
+        document.querySelectorAll('.btn-asignar').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.dataset.id;
+                mostrarModalAsignarRepartidor(id);
+            });
+        });
+        
         document.querySelectorAll('.checkbox-pedido').forEach(cb => {
             cb.addEventListener('change', () => toggleSeleccionPedido(cb));
         });
@@ -638,21 +1023,89 @@ async function cargarPedidos() {
             selectAllCheckbox.addEventListener('change', () => toggleSeleccionarTodos(selectAllCheckbox));
         }
         
+        // Configurar búsqueda
+        const searchInput = document.getElementById('searchInputPedidos');
+        if (searchInput) {
+            searchInput.value = terminoBusquedaPedidos;
+            searchInput.addEventListener('keypress', manejarTeclaEnterPedidos);
+            
+            const clearButton = document.getElementById('btnClearSearchPedidos');
+            if (clearButton && terminoBusquedaPedidos.length > 0) {
+                clearButton.style.display = 'block';
+            }
+        }
+        
+        const btnBuscar = document.getElementById('btnBuscarPedido');
+        if (btnBuscar) {
+            btnBuscar.addEventListener('click', ejecutarBusquedaPedidos);
+        }
+        
+        actualizarBadgePendientes();
+        
     } catch (error) {
         console.error('Error al cargar pedidos:', error);
         content.innerHTML = '<div style="text-align: center; padding: 50px; color: red;">Error al cargar pedidos</div>';
     }
 }
 
+// ============================================
+// PEDIDOS TEMPLATE CON BARRA DE BÚSQUEDA
+// ============================================
 function pedidosTemplate(pedidos) {
-    const pendientes = pedidos.filter(p => p.estado_admin === 'pendiente_admin');
-    const aprobados = pedidos.filter(p => p.estado_admin === 'aprobado');
-    const otros = pedidos.filter(p => p.estado_admin !== 'pendiente_admin' && p.estado_admin !== 'aprobado');
+    const pendientes = pedidos.filter(p => 
+        p.estado_admin === 'pendiente_admin' && 
+        p.estado !== 'cancelado' &&
+        p.estado !== 'rechazado'
+    );
+    const aprobados = pedidos.filter(p => p.estado_admin === 'pendiente_repartidor' && p.estado !== 'cancelado');
+    const cancelados = pedidos.filter(p => p.estado === 'cancelado');
+    const otros = pedidos.filter(p => 
+        (p.estado_admin !== 'pendiente_admin' && p.estado_admin !== 'pendiente_repartidor') &&
+        p.estado !== 'cancelado'
+    );
     
-    // Combinar todos los pedidos para la tabla "Todos los Pedidos"
-    const todosPedidos = [...aprobados, ...otros];
+    const todosPedidos = [...aprobados, ...otros, ...cancelados];
     
     return `
+        <!-- BARRA DE BÚSQUEDA PARA PEDIDOS -->
+        <div style="margin-bottom: 20px; display: flex; gap: 10px; align-items: center;">
+            <div style="position: relative; flex: 1; max-width: 400px;">
+                <input 
+                    type="text" 
+                    id="searchInputPedidos" 
+                    placeholder="Buscar por ID, cliente, estado, método de pago..."
+                    value="${terminoBusquedaPedidos || ''}"
+                    autocomplete="off"
+                    style="width: 100%; padding: 10px 40px 10px 15px; border: 2px solid #d1d5db; border-radius: 8px; font-size: 14px; box-sizing: border-box;"
+                >
+                <button 
+                    id="btnClearSearchPedidos" 
+                    onclick="limpiarBusquedaPedidos()"
+                    title="Limpiar búsqueda"
+                    type="button"
+                    style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 14px; padding: 4px; display: ${terminoBusquedaPedidos ? 'block' : 'none'};"
+                >
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <button 
+                id="btnBuscarPedido"
+                type="button"
+                style="background-color: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 500; white-space: nowrap;"
+            >
+                <i class="fas fa-search"></i> Buscar
+            </button>
+        </div>
+        
+        ${terminoBusquedaPedidos ? `
+            <div style="margin-bottom: 15px; color: #6b7280; font-size: 13px;">
+                <i class="fas fa-filter"></i> Resultados para: "<strong>${terminoBusquedaPedidos}</strong>"
+                <span style="margin-left: 10px; color: #3b82f6; cursor: pointer;" onclick="limpiarBusquedaPedidos()">
+                    <i class="fas fa-times-circle"></i> Limpiar filtro
+                </span>
+            </div>
+        ` : ''}
+        
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-info">
@@ -674,8 +1127,17 @@ function pedidosTemplate(pedidos) {
             </div>
             <div class="stat-card">
                 <div class="stat-info">
+                    <h3>Cancelados</h3>
+                    <span class="stat-number" style="color: #ef4444;">${cancelados.length}</span>
+                </div>
+                <div class="stat-icon" style="background: #fef2f2;">
+                    <i class="fas fa-ban" style="color: #ef4444;"></i>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-info">
                     <h3>Crédito</h3>
-                    <span class="stat-number">${pedidos.filter(p => p.es_credito).length}</span>
+                    <span class="stat-number">${pedidos.filter(p => p.es_credito && p.estado !== 'cancelado').length}</span>
                 </div>
                 <div class="stat-icon pending">
                     <i class="fas fa-credit-card"></i>
@@ -728,7 +1190,7 @@ function pedidosTemplate(pedidos) {
                     `).join('')}
                     ${pendientes.length === 0 ? `
                         <tr>
-                            <td colspan="6" style="text-align: center;">No hay pedidos pendientes</td>
+                            <td colspan="6" style="text-align: center;">No hay pedidos pendientes${terminoBusquedaPedidos ? ` para "${terminoBusquedaPedidos}"` : ''}</td>
                         </tr>
                     ` : ''}
                 </tbody>
@@ -769,21 +1231,30 @@ function pedidosTemplate(pedidos) {
                     </tr>
                 </thead>
                 <tbody>
-                    ${todosPedidos.map(p => `
+                    ${todosPedidos.map(p => {
+                        const isCancelado = p.estado === 'cancelado';
+                        const estadoMostrar = isCancelado ? 'Cancelado' : p.estado;
+                        const estadoClass = isCancelado ? 'status-cancelado' : `status-${p.estado}`;
+                        // 🆕 CORRECCIÓN: Solo mostrar botón de asignar cuando estado es 'pendiente_repartidor'
+                        const mostrarBotonAsignar = p.estado_admin === 'pendiente_repartidor' && 
+                                                   p.estado === 'pendiente_repartidor';
+                        
+                        return `
                         <tr>
                             <td style="text-align: center;">
                                 <input type="checkbox" 
                                        class="checkbox-pedido" 
                                        data-id="${p.id_pedido}" 
-                                       style="width: 18px; height: 18px; cursor: pointer; display: none;">
+                                       ${isCancelado ? 'disabled' : ''}
+                                       style="width: 18px; height: 18px; cursor: ${isCancelado ? 'not-allowed' : 'pointer'}; display: none;">
                             </td>
                             <td>#${p.id_pedido}</td>
                             <td>${p.usuario?.nombre || 'N/A'}</td>
                             <td>${new Date(p.fecha_pedido).toLocaleDateString()}</td>
                             <td>$${(p.total || 0).toFixed(2)}</td>
                             <td>
-                                <span class="status-badge status-${p.estado}">
-                                    ${p.estado_admin === 'aprobado' ? 'Aprobado' : p.estado}
+                                <span class="status-badge ${estadoClass}" style="${isCancelado ? 'background:#9e9e9e;' : ''}">
+                                    ${estadoMostrar}
                                 </span>
                             </td>
                             <td>
@@ -795,18 +1266,29 @@ function pedidosTemplate(pedidos) {
                                 <button class="btn btn-sm btn-primary btn-ver-detalles" data-id="${p.id_pedido}">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                                <button class="btn btn-sm btn-danger btn-eliminar" 
-                                        data-id="${p.id_pedido}"
-                                        style="background-color: #dc2626; margin-left: 5px;"
-                                        title="Eliminar pedido">
-                                    <i class="fas fa-trash"></i>
-                                </button>
+                                ${mostrarBotonAsignar ? `
+                                    <button class="btn btn-sm btn-asignar" 
+                                            data-id="${p.id_pedido}"
+                                            style="background-color: #8b5cf6; color: white; margin-left: 5px;"
+                                            title="Asignar repartidor">
+                                        <i class="fas fa-motorcycle"></i>
+                                    </button>
+                                ` : ''}
+                                ${!isCancelado ? `
+                                    <button class="btn btn-sm btn-danger btn-eliminar" 
+                                            data-id="${p.id_pedido}"
+                                            style="background-color: #dc2626; margin-left: 5px;"
+                                            title="Eliminar pedido">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                ` : ''}
                             </td>
                         </tr>
-                    `).join('')}
+                        `;
+                    }).join('')}
                     ${todosPedidos.length === 0 ? `
                         <tr>
-                            <td colspan="8" style="text-align: center;">No hay pedidos registrados</td>
+                            <td colspan="8" style="text-align: center;">No hay pedidos registrados${terminoBusquedaPedidos ? ` para "${terminoBusquedaPedidos}"` : ''}</td>
                         </tr>
                     ` : ''}
                 </tbody>
@@ -815,16 +1297,34 @@ function pedidosTemplate(pedidos) {
     `;
 }
 
+// ============================================
+// FUNCIÓN PARA APROBAR PEDIDO (CORREGIDA)
+// ============================================
 async function aprobarPedido(idPedido, botonClickeado = null) {
-    // Mostrar spinner en el botón si se proporcionó
     if (botonClickeado) {
         mostrarSpinnerEnBoton(botonClickeado);
     }
     
     try {
-        console.log('📝 Aprobando pedido:', idPedido);
+        // Verificar que el pedido no esté cancelado
+        const { data: pedidoActual, error: errorVerificar } = await supabaseClient
+            .from('pedido')
+            .select('estado')
+            .eq('id_pedido', idPedido)
+            .single();
         
-        // Obtener información completa del pedido incluyendo detalles
+        if (errorVerificar) throw errorVerificar;
+        
+        if (pedidoActual.estado === 'cancelado') {
+            mostrarToastPedidos(`❌ El pedido #${idPedido} ya fue cancelado por el cliente`, 'error');
+            if (botonClickeado) restaurarBoton(botonClickeado);
+            cargarPedidos();
+            return;
+        }
+        
+        console.log('📝 Obteniendo información del pedido para aprobar:', idPedido);
+        
+        // Obtener información del pedido sin verificar stock
         const { data: pedido, error: errorPedido } = await supabaseClient
             .from('pedido')
             .select(`
@@ -850,30 +1350,63 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
         console.log('✅ Pedido encontrado:', pedido);
         
         // ============================================
-        // SOLO PARA PEDIDOS A CRÉDITO
-        // Crear cuenta por cobrar y actualizar saldo
+        // CORRECCIÓN: Eliminar verificación de stock
+        // El stock ya fue descontado cuando el cliente 
+        // realizó el pedido desde la app móvil, por lo que 
+        // verificar stock > 0 aquí causaría rechazos falsos
         // ============================================
+        
+        // SOLO MOSTRAR ADVERTENCIA SI EL STOCK ESTÁ BAJO (opcional)
+        // No bloquea la aprobación, solo informa
+        if (pedido.detalle_pedido && pedido.detalle_pedido.length > 0) {
+            const productosStockBajo = [];
+            
+            for (const detalle of pedido.detalle_pedido) {
+                const stockActual = detalle.producto?.stock_actual || 0;
+                const cantidadSolicitada = detalle.cantidad;
+                
+                console.log(`📦 Producto: ${detalle.producto?.nombre}, Stock actual: ${stockActual}, Pedido: ${cantidadSolicitada}`);
+                
+                // Solo advertir si el stock quedó en 0 o negativo después del descuento
+                if (stockActual < 0) {
+                    productosStockBajo.push({
+                        nombre: detalle.producto?.nombre || 'Producto desconocido',
+                        stock: stockActual,
+                        solicitado: cantidadSolicitada
+                    });
+                }
+            }
+            
+            // Si hay productos con stock negativo, mostrar advertencia pero permitir continuar
+            if (productosStockBajo.length > 0) {
+                console.warn('⚠️ Productos con stock negativo detectado:');
+                productosStockBajo.forEach(p => {
+                    console.warn(`  - ${p.nombre}: Stock: ${p.stock}, Pedido: ${p.solicitado}`);
+                });
+                // Solo mostramos advertencia, no bloqueamos
+                mostrarToastPedidos('⚠️ Advertencia: Algunos productos tienen stock negativo. Revise el inventario.', 'warning');
+            }
+        }
+        
+        console.log('📝 Aprobando pedido:', idPedido);
+        
         if (pedido.es_credito === true) {
             console.log('💳 Pedido con crédito detectado, creando cuenta por cobrar...');
             
-            // Verificar que el usuario tiene crédito autorizado
             const usuario = pedido.usuario;
             if (!usuario.credito_autorizado) {
                 throw new Error('El cliente no tiene crédito autorizado');
             }
             
-            // Verificar que el pedido no exceda el límite de crédito disponible
             const disponibleActual = (usuario.credito_limite || 0) - (usuario.credito_saldo || 0);
             if (pedido.total > disponibleActual) {
                 throw new Error(`El cliente no tiene suficiente crédito disponible. Disponible: $${disponibleActual.toFixed(2)}`);
             }
             
-            // Calcular fecha de vencimiento según los días de plazo del cliente
             const diasPlazo = usuario.credito_dias_plazo || 30;
             const fechaVencimiento = new Date();
             fechaVencimiento.setDate(fechaVencimiento.getDate() + diasPlazo);
             
-            // Crear la cuenta por cobrar
             const { data: nuevaCuenta, error: errorCuenta } = await supabaseClient
                 .from('cuentaporcobrar')
                 .insert({
@@ -896,7 +1429,6 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
             
             console.log('✅ Cuenta por cobrar creada:', nuevaCuenta);
             
-            // Actualizar el credito_saldo del usuario
             const nuevoSaldoCredito = (usuario.credito_saldo || 0) + pedido.total;
             const { error: errorUpdateSaldo } = await supabaseClient
                 .from('usuario')
@@ -911,7 +1443,6 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
                 console.log(`✅ Saldo de crédito actualizado: $${(usuario.credito_saldo || 0).toFixed(2)} → $${nuevoSaldoCredito.toFixed(2)}`);
             }
             
-            // Notificar al cliente sobre su nueva deuda
             await supabaseClient
                 .from('notificacion')
                 .insert({
@@ -927,33 +1458,12 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
             console.log('💵 Pedido a efectivo - No se crea cuenta por cobrar');
         }
         
-        // ============================================
-        // CONTINUAR CON LA APROBACIÓN NORMAL DEL PEDIDO
-        // (TANTO PARA CRÉDITO COMO PARA EFECTIVO)
-        // ============================================
-        
-        // BUSCAR REPARTIDORES DISPONIBLES
-        const { data: repartidores, error: errorRepartidores } = await supabaseClient
-            .from('usuario')
-            .select('id_usuario, nombre')
-            .eq('rol', 'repartidor')
-            .eq('disponible', true);
-        
-        if (errorRepartidores) {
-            console.error('Error al buscar repartidores:', errorRepartidores);
-            throw errorRepartidores;
-        }
-        
-        console.log('👥 Repartidores disponibles:', repartidores?.length || 0);
-        
-        const hayRepartidores = repartidores && repartidores.length > 0;
-        
-        // Actualizar estado del pedido
+        // Actualizar estado del pedido a pendiente_repartidor
         const { error: errorUpdate } = await supabaseClient
             .from('pedido')
             .update({
-                estado_admin: 'aprobado',
-                estado: hayRepartidores ? 'pendiente_repartidor' : 'aprobado',
+                estado_admin: 'pendiente_repartidor',
+                estado: 'pendiente_repartidor',
                 fecha_aprobacion: new Date().toISOString(),
                 aprobado_por: currentUser.id_usuario
             })
@@ -961,81 +1471,43 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
         
         if (errorUpdate) throw errorUpdate;
         
-        // NOTIFICAR A REPARTIDORES si hay disponibles
-        if (hayRepartidores) {
-            for (const repartidor of repartidores) {
-                await supabaseClient
-                    .from('notificacion')
-                    .insert({
-                        id_usuario: repartidor.id_usuario,
-                        titulo: '📦 Nuevo Pedido Disponible',
-                        mensaje: `Pedido #${idPedido} - $${pedido.total} - Cliente: ${pedido.usuario?.nombre || 'Cliente'}`,
-                        tipo: 'pedido_disponible',
-                        id_referencia: idPedido
-                    });
-            }
-        }
-        
-        // NOTIFICAR AL CLIENTE (confirmación de pedido)
+        // Notificar al cliente que su pedido fue aprobado
         if (pedido.id_usuario) {
-            const mensajeCliente = hayRepartidores 
-                ? `Tu pedido #${idPedido} ha sido confirmado y ya hay repartidores disponibles`
-                : `Tu pedido #${idPedido} ha sido confirmado. Estamos esperando repartidor disponible.`;
-            
             await supabaseClient
                 .from('notificacion')
                 .insert({
                     id_usuario: pedido.id_usuario,
                     titulo: '✅ Pedido Confirmado',
-                    mensaje: mensajeCliente,
+                    mensaje: `Tu pedido #${idPedido} ha sido confirmado. Pronto te asignaremos un repartidor.`,
                     tipo: 'pedido_confirmado',
                     id_referencia: idPedido
                 });
         }
         
-        // NOTIFICAR AL ADMIN (confirmación)
+        // Notificar al admin que el pedido fue aprobado y necesita asignación
         await supabaseClient
             .from('notificacion')
             .insert({
                 id_usuario: currentUser.id_usuario,
                 titulo: '✅ Pedido Aprobado',
-                mensaje: `Pedido #${idPedido} aprobado correctamente` + (hayRepartidores ? ` - Notificados ${repartidores.length} repartidor(es)` : ' - Sin repartidores disponibles'),
+                mensaje: `Pedido #${idPedido} aprobado correctamente. Debes asignar un repartidor.`,
                 tipo: 'pedido_aprobado',
                 id_referencia: idPedido
             });
         
-        // Mostrar mensaje de éxito con toast en lugar de alert
         let mensajeExito = '';
         if (pedido.es_credito) {
-            mensajeExito = `✅ Pedido #${idPedido} aprobado. Se cargó $${pedido.total.toFixed(2)} al crédito del cliente.`;
+            mensajeExito = `✅ Pedido #${idPedido} aprobado. Se cargó $${pedido.total.toFixed(2)} al crédito del cliente. Ahora debes asignar un repartidor.`;
         } else {
-            mensajeExito = `✅ Pedido #${idPedido} aprobado correctamente.`;
+            mensajeExito = `✅ Pedido #${idPedido} aprobado correctamente. Ahora debes asignar un repartidor.`;
         }
         
-        if (hayRepartidores) {
-            mensajeExito += ` Se notificó a ${repartidores.length} repartidor(es).`;
-        } else {
-            mensajeExito += ` No hay repartidores disponibles, el pedido quedará en espera.`;
-        }
+        mostrarToastPedidos(mensajeExito, 'success');
         
-        mostrarToast(mensajeExito, 'success');
+        actualizarBadgePendientes();
         
-        // Actualizar badge de pedidos pendientes
-        const badgePedidos = document.getElementById('pedidosPendientesBadge');
-        if (badgePedidos) {
-            const currentCount = parseInt(badgePedidos.textContent) || 0;
-            if (currentCount > 0) {
-                badgePedidos.textContent = currentCount - 1;
-                if (badgePedidos.textContent === '0') {
-                    badgePedidos.style.display = 'none';
-                }
-            }
-        }
-        
-        // Recargar la vista de pedidos
         cargarPedidos();
         
-        // Si estamos en la vista de inicio, también recargarla para actualizar estadísticas
         if (typeof currentView !== 'undefined' && currentView === 'inicio') {
             if (typeof cargarInicio === 'function') {
                 cargarInicio();
@@ -1050,9 +1522,8 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
             mensajeError += ': ' + error.message;
         }
         
-        mostrarToast(mensajeError, 'error');
+        mostrarToastPedidos(mensajeError, 'error');
         
-        // Restaurar botón en caso de error
         if (botonClickeado) {
             restaurarBoton(botonClickeado);
         }
@@ -1060,13 +1531,9 @@ async function aprobarPedido(idPedido, botonClickeado = null) {
 }
 
 async function rechazarPedido(idPedido, motivo, botonClickeado = null) {
-    // Guardar referencia al botón pero NO mostrar spinner para evitar conflictos con la recarga del DOM
-    // El botón será destruido cuando se recargue la vista, así que no lo manipulamos
-    
     try {
         console.log('📝 Rechazando pedido:', idPedido, 'Motivo:', motivo);
         
-        // Obtener información del pedido y sus detalles
         const { data: pedido, error } = await supabaseClient
             .from('pedido')
             .select(`
@@ -1083,16 +1550,12 @@ async function rechazarPedido(idPedido, motivo, botonClickeado = null) {
         
         console.log('📦 Detalles del pedido obtenidos:', pedido.detalle_pedido);
         
-        // ============================================
-        // RESTAURAR EL STOCK DE LOS PRODUCTOS
-        // ============================================
         if (pedido.detalle_pedido && pedido.detalle_pedido.length > 0) {
             console.log('🔄 Restaurando stock de productos...');
             
             for (const detalle of pedido.detalle_pedido) {
                 console.log(`Procesando producto ID: ${detalle.id_producto}, cantidad: ${detalle.cantidad}`);
                 
-                // Obtener el stock actual del producto
                 const { data: producto, error: errorProducto } = await supabaseClient
                     .from('producto')
                     .select('stock_actual, nombre')
@@ -1110,12 +1573,10 @@ async function rechazarPedido(idPedido, motivo, botonClickeado = null) {
                 }
                 
                 const stockAnterior = producto.stock_actual || 0;
-                // Calcular nuevo stock sumando la cantidad del pedido rechazado
                 const nuevoStock = stockAnterior + detalle.cantidad;
                 
                 console.log(`Producto: ${producto.nombre}, Stock anterior: ${stockAnterior}, Cantidad a restaurar: ${detalle.cantidad}, Nuevo stock: ${nuevoStock}`);
                 
-                // Actualizar el stock del producto
                 const { data: updateResult, error: errorUpdate } = await supabaseClient
                     .from('producto')
                     .update({ stock_actual: nuevoStock })
@@ -1133,7 +1594,6 @@ async function rechazarPedido(idPedido, motivo, botonClickeado = null) {
             console.log('⚠️ No hay detalles de pedido para restaurar stock');
         }
         
-        // Actualizar pedido
         const { error: errorUpdate } = await supabaseClient
             .from('pedido')
             .update({
@@ -1147,7 +1607,6 @@ async function rechazarPedido(idPedido, motivo, botonClickeado = null) {
         
         if (errorUpdate) throw errorUpdate;
         
-        // Notificar al cliente
         if (pedido.id_usuario) {
             await supabaseClient
                 .from('notificacion')
@@ -1160,31 +1619,20 @@ async function rechazarPedido(idPedido, motivo, botonClickeado = null) {
                 });
         }
         
-        mostrarToast(`✅ Pedido #${idPedido} rechazado correctamente. Stock restaurado.`, 'success');
+        mostrarToastPedidos(`✅ Pedido #${idPedido} rechazado correctamente. Stock restaurado.`, 'success');
         
-        // Actualizar badge
-        const badgePedidos = document.getElementById('pedidosPendientesBadge');
-        if (badgePedidos) {
-            const currentCount = parseInt(badgePedidos.textContent) || 0;
-            if (currentCount > 0) {
-                badgePedidos.textContent = currentCount - 1;
-                if (badgePedidos.textContent === '0') {
-                    badgePedidos.style.display = 'none';
-                }
-            }
-        }
+        actualizarBadgePendientes();
         
         cargarPedidos();
         
     } catch (error) {
         console.error('Error al rechazar pedido:', error);
-        mostrarToast('Error al rechazar pedido: ' + error.message, 'error');
+        mostrarToastPedidos('Error al rechazar pedido: ' + error.message, 'error');
     }
 }
 
 async function verDetallesPedido(idPedido) {
     try {
-        // Primero, obtener los datos del pedido
         const { data: pedido, error } = await supabaseClient
             .from('pedido')
             .select(`
@@ -1200,7 +1648,6 @@ async function verDetallesPedido(idPedido) {
         
         if (error) throw error;
         
-        // Obtener la información de entrega por separado para tener más control
         const { data: entregaData, error: errorEntrega } = await supabaseClient
             .from('entrega')
             .select(`
@@ -1220,12 +1667,10 @@ async function verDetallesPedido(idPedido) {
         
         let nombreRepartidor = 'No asignado';
         
-        // Si hay datos de entrega y tiene algún ID de repartidor
         if (entregaData) {
             let idRepartidorBuscar = entregaData.id_repartidor || entregaData.id_repartidor_uuid;
             
             if (idRepartidorBuscar) {
-                // Buscar el nombre del repartidor en la tabla usuario
                 const { data: repartidorData, error: errorRepartidor } = await supabaseClient
                     .from('usuario')
                     .select('nombre')
@@ -1238,7 +1683,6 @@ async function verDetallesPedido(idPedido) {
             }
         }
         
-        // Debug para ver qué está pasando
         console.log('Pedido:', pedido);
         console.log('Entrega data:', entregaData);
         console.log('Nombre repartidor encontrado:', nombreRepartidor);
@@ -1323,18 +1767,34 @@ async function verDetallesPedido(idPedido) {
         
     } catch (error) {
         console.error('Error al cargar detalles:', error);
-        mostrarToast('Error al cargar detalles del pedido', 'error');
+        mostrarToastPedidos('Error al cargar detalles del pedido', 'error');
     }
 }
 
 // ============================================
-// FUNCIÓN PARA GENERAR REPORTE DE VENTAS ENTREGADAS
+// 🆕 FUNCIÓN PARA GENERAR REPORTE DE VENTAS ENTREGADAS (MODIFICADA)
 // ============================================
 async function generarReporteVentasEntregadas() {
     try {
-        mostrarToast('📊 Generando reporte de ventas...', 'info');
+        mostrarToastPedidos('📊 Generando reporte de ventas...', 'info');
         
-        // Obtener pedidos entregados (estado = 'entregado')
+        // Obtener fecha actual
+        const fechaActual = new Date();
+        
+        // Calcular primer día y último día del mes actual
+        const primerDiaMes = new Date(fechaActual.getFullYear(), fechaActual.getMonth(), 1);
+        const ultimoDiaMes = new Date(fechaActual.getFullYear(), fechaActual.getMonth() + 1, 0, 23, 59, 59, 999);
+        
+        // Formatear fechas para la consulta
+        const fechaInicio = primerDiaMes.toISOString();
+        const fechaFin = ultimoDiaMes.toISOString();
+        
+        console.log('📅 Generando reporte del mes:', 
+            primerDiaMes.toLocaleDateString('es-MX'), 
+            'al', 
+            ultimoDiaMes.toLocaleDateString('es-MX'));
+        
+        // Obtener pedidos entregados SOLO del mes actual
         const { data: pedidos, error } = await supabaseClient
             .from('pedido')
             .select(`
@@ -1345,20 +1805,20 @@ async function generarReporteVentasEntregadas() {
                 usuario:id_usuario (nombre, email)
             `)
             .eq('estado', 'entregado')
+            .gte('fecha_pedido', fechaInicio)
+            .lte('fecha_pedido', fechaFin)
             .order('fecha_pedido', { ascending: false });
         
         if (error) throw error;
         
         if (!pedidos || pedidos.length === 0) {
-            mostrarToast('⚠️ No hay pedidos entregados para generar el reporte', 'warning');
+            const nombreMes = fechaActual.toLocaleDateString('es-MX', { month: 'long' });
+            mostrarToastPedidos(`⚠️ No hay pedidos entregados en ${nombreMes} para generar el reporte`, 'warning');
             return;
         }
         
         // Calcular total de ventas
         const totalVentas = pedidos.reduce((sum, pedido) => sum + (pedido.total || 0), 0);
-        
-        // Obtener fecha actual para el reporte
-        const fechaActual = new Date();
         
         // Formatear fecha para mostrar
         const formatoFecha = (fecha) => {
@@ -1370,9 +1830,10 @@ async function generarReporteVentasEntregadas() {
         };
         
         const fechaReporte = formatoFecha(fechaActual);
+        const nombreMes = fechaActual.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
         
-        // Generar nombre del archivo BIEN PERRÓN
-        const nombreArchivo = `DISTRIBUIDORA_JARAMILLO_Reporte_Ventas_Entregadas_${fechaActual.toLocaleDateString('es-MX').replace(/\//g, '-')}_${fechaActual.toLocaleTimeString('es-MX').replace(/:/g, '-').replace(/\s/g, '')}.pdf`;
+        // Generar nombre del archivo
+        const nombreArchivo = `DISTRIBUIDORA_JARAMILLO_Reporte_Ventas_${nombreMes.replace(/\s/g, '_')}.pdf`;
         
         // Cargar librerías necesarias dinámicamente
         const cargarScript = (src) => {
@@ -1390,7 +1851,7 @@ async function generarReporteVentasEntregadas() {
         };
         
         // Cargar html2canvas y jsPDF
-        mostrarToast('📄 Preparando documento PDF...', 'info');
+        mostrarToastPedidos('📄 Preparando documento PDF...', 'info');
         await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
         await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
         
@@ -1402,31 +1863,36 @@ async function generarReporteVentasEntregadas() {
         reporteContainer.style.width = '1200px';
         reporteContainer.style.backgroundColor = 'white';
         reporteContainer.style.fontFamily = 'Arial, sans-serif';
-        reporteContainer.style.padding = '20px';
+        reporteContainer.style.padding = '56px'; // 2cm de margen general
         
-        // Construir el HTML del reporte con colores AZULES
+        // Construir el HTML del reporte con márgenes de 2cm en encabezado y pie
         reporteContainer.innerHTML = `
             <div style="max-width: 1100px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);">
-                <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a7b 100%); color: white; padding: 25px 30px; display: flex; align-items: center; justify-content: space-between; border-bottom: 4px solid #3b82f6;">
-                    <div style="display: flex; align-items: center; gap: 20px;">
-                        <div style="width: 120px; height: 120px; background-color: white; border-radius: 12px; padding: 10px; display: flex; align-items: center; justify-content: center;">
-                            <img src="logotipoJaramillo/logotipooficialdjsinfondo.png" 
-                                 alt="Distribuidora Jaramillo" 
-                                 style="width: 100%; height: 100%; object-fit: contain;"
-                                 onerror="this.parentElement.innerHTML='<div style=\\'font-size: 50px;\\'>🏭</div>'">
+                <!-- ENCABEZADO CON MARGEN SUPERIOR DE 2cm -->
+                <div style="padding: 56px 56px 28px 56px; background: linear-gradient(135deg, #1e3a5f 0%, #2d5a7b 100%); color: white; border-bottom: 4px solid #3b82f6;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 20px;">
+                            <div style="width: 120px; height: 120px; background-color: white; border-radius: 12px; padding: 10px; display: flex; align-items: center; justify-content: center;">
+                                <img src="logotipoJaramillo/logotipooficialdj.png" 
+                                     alt="Distribuidora Jaramillo" 
+                                     style="width: 100%; height: 100%; object-fit: contain;"
+                                     onerror="this.parentElement.innerHTML='<div style=\\'font-size: 50px;\\'>🏭</div>'">
+                            </div>
+                            <div>
+                                <h1 style="font-size: 28px; font-weight: bold; margin-bottom: 5px; margin: 0;">DISTRIBUIDORA JARAMILLO</h1>
+                                <div style="font-size: 18px; opacity: 0.95; margin-top: 5px;">REPORTE DE VENTAS ENTREGADAS</div>
+                                <div style="font-size: 14px; opacity: 0.85; margin-top: 5px;">${nombreMes}</div>
+                            </div>
                         </div>
-                        <div>
-                            <h1 style="font-size: 28px; font-weight: bold; margin-bottom: 5px; margin: 0;">DISTRIBUIDORA JARAMILLO</h1>
-                            <div style="font-size: 18px; opacity: 0.95; margin-top: 5px;">REPORTE DE VENTAS ENTREGADAS</div>
+                        <div style="text-align: right; font-size: 16px; background: rgba(255, 255, 255, 0.15); padding: 12px 18px; border-radius: 8px;">
+                            <span style="display: block; font-size: 14px; opacity: 0.9;">Fecha del reporte:</span>
+                            ${fechaReporte}
                         </div>
-                    </div>
-                    <div style="text-align: right; font-size: 16px; background: rgba(255, 255, 255, 0.15); padding: 12px 18px; border-radius: 8px;">
-                        <span style="display: block; font-size: 14px; opacity: 0.9;">Fecha del reporte:</span>
-                        ${fechaReporte}
                     </div>
                 </div>
                 
-                <div style="padding: 30px;">
+                <!-- CONTENIDO CON MÁRGENES LATERALES DE 2cm -->
+                <div style="padding: 56px;">
                     <div style="background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-radius: 10px; padding: 20px 25px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; border-left: 5px solid #2563eb;">
                         <div style="text-align: center;">
                             <div style="font-size: 14px; color: #1e293b; margin-bottom: 5px; font-weight: 500;">Total de Pedidos Entregados</div>
@@ -1444,7 +1910,7 @@ async function generarReporteVentasEntregadas() {
                     
                     <div style="margin-top: 25px;">
                         <h3 style="font-size: 20px; color: #1e3a5f; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #93c5fd;">
-                            📋 Detalle de Pedidos Entregados
+                            📋 Detalle de Pedidos Entregados - ${nombreMes}
                         </h3>
                         <table style="width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);">
                             <thead>
@@ -1485,9 +1951,10 @@ async function generarReporteVentasEntregadas() {
                     </div>
                 </div>
                 
-                <div style="background-color: #eff6ff; padding: 20px 30px; text-align: center; border-top: 1px solid #bfdbfe; color: #475569; font-size: 13px;">
+                <!-- PIE DE PÁGINA CON MARGEN INFERIOR DE 2cm -->
+                <div style="padding: 28px 56px 56px 56px; background-color: #eff6ff; text-align: center; border-top: 1px solid #bfdbfe; color: #475569; font-size: 13px;">
                     <p style="margin: 0;">© ${fechaActual.getFullYear()} Distribuidora Jaramillo - Reporte generado el ${new Date().toLocaleString('es-MX')}</p>
-                    <p style="margin-top: 5px; font-size: 12px; margin-bottom: 0;">Este reporte incluye todos los pedidos con estado "Entregado"</p>
+                    <p style="margin-top: 5px; font-size: 12px; margin-bottom: 0;">Este reporte incluye los pedidos con estado "Entregado" del mes de ${nombreMes}</p>
                 </div>
             </div>
         `;
@@ -1545,42 +2012,25 @@ async function generarReporteVentasEntregadas() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         
-        mostrarToast('✅ Reporte generado exitosamente. Elige dónde guardarlo.', 'success');
+        mostrarToastPedidos('✅ Reporte generado exitosamente. Elige dónde guardarlo.', 'success');
         
     } catch (error) {
         console.error('Error al generar reporte:', error);
-        mostrarToast('❌ Error al generar el reporte: ' + error.message, 'error');
+        mostrarToastPedidos('❌ Error al generar el reporte: ' + error.message, 'error');
     }
 }
 
-// Exportar funciones para uso global
-window.cargarPedidos = cargarPedidos;
-window.verDetallesPedido = verDetallesPedido;
-window.aprobarPedido = aprobarPedido;
-window.rechazarPedido = rechazarPedido;
-window.eliminarPedidoIndividual = eliminarPedidoIndividual;
-window.toggleModoSeleccion = toggleModoSeleccion;
-window.confirmarEliminacionSeleccionados = confirmarEliminacionSeleccionados;
-window.toggleSeleccionarTodos = toggleSeleccionarTodos;
-window.toggleSeleccionPedido = toggleSeleccionPedido;
-window.generarReporteVentasEntregadas = generarReporteVentasEntregadas;
-window.mostrarModalMotivoRechazo = mostrarModalMotivoRechazo;
-
 // ============================================
-// INYECTAR ESTILOS CSS PARA TOAST Y SPINNER
+// INYECTAR ESTILOS CSS PARA PEDIDOS
 // ============================================
 (function injectStyles() {
-    // Verificar si los estilos ya fueron inyectados
-    if (document.getElementById('toast-spinner-styles')) {
+    if (document.getElementById('pedidos-custom-styles')) {
         return;
     }
     
     const styleElement = document.createElement('style');
-    styleElement.id = 'toast-spinner-styles';
+    styleElement.id = 'pedidos-custom-styles';
     styleElement.textContent = `
-        /* ============================================ */
-        /* ESTILOS PARA TOAST DE NOTIFICACIÓN PROFESIONAL */
-        /* ============================================ */
         .toast-notification {
             position: fixed;
             top: 20px;
@@ -1595,219 +2045,56 @@ window.mostrarModalMotivoRechazo = mostrarModalMotivoRechazo;
             justify-content: space-between;
             padding: 16px 20px;
             z-index: 10000;
-            animation: slideIn 0.3s ease;
+            animation: pedidosSlideIn 0.3s ease;
             border-left: 4px solid;
-            backdrop-filter: blur(10px);
         }
 
-        .toast-success {
-            border-left-color: #10b981;
-            background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+        .toast-notification.toast-success { border-left-color: #10b981; background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%); }
+        .toast-notification.toast-success .toast-icon { color: #10b981; }
+        .toast-notification.toast-error { border-left-color: #ef4444; background: linear-gradient(135deg, #ffffff 0%, #fef2f2 100%); }
+        .toast-notification.toast-error .toast-icon { color: #ef4444; }
+        .toast-notification.toast-warning { border-left-color: #f59e0b; background: linear-gradient(135deg, #ffffff 0%, #fffbeb 100%); }
+        .toast-notification.toast-warning .toast-icon { color: #f59e0b; }
+        .toast-notification.toast-info { border-left-color: #3b82f6; background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%); }
+        .toast-notification.toast-info .toast-icon { color: #3b82f6; }
+
+        .toast-notification .toast-content { display: flex; align-items: center; gap: 12px; flex: 1; }
+        .toast-notification .toast-icon { font-size: 24px; flex-shrink: 0; }
+        .toast-notification .toast-message { font-size: 14px; font-weight: 500; color: #1f2937; line-height: 1.4; white-space: pre-line; }
+        .toast-notification .toast-close { background: transparent; border: none; color: #9ca3af; cursor: pointer; font-size: 16px; padding: 4px 8px; border-radius: 6px; transition: all 0.2s; margin-left: 12px; flex-shrink: 0; }
+        .toast-notification .toast-close:hover { background: rgba(0, 0, 0, 0.05); color: #4b5563; }
+
+        @keyframes pedidosSlideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes pedidosSlideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
         }
 
-        .toast-success .toast-icon {
-            color: #10b981;
-        }
-
-        .toast-error {
-            border-left-color: #ef4444;
-            background: linear-gradient(135deg, #ffffff 0%, #fef2f2 100%);
-        }
-
-        .toast-error .toast-icon {
-            color: #ef4444;
-        }
-
-        .toast-warning {
-            border-left-color: #f59e0b;
-            background: linear-gradient(135deg, #ffffff 0%, #fffbeb 100%);
-        }
-
-        .toast-warning .toast-icon {
-            color: #f59e0b;
-        }
-
-        .toast-info {
-            border-left-color: #3b82f6;
-            background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
-        }
-
-        .toast-info .toast-icon {
-            color: #3b82f6;
-        }
-
-        .toast-content {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex: 1;
-        }
-
-        .toast-icon {
-            font-size: 24px;
-            flex-shrink: 0;
-        }
-
-        .toast-message {
-            font-size: 14px;
-            font-weight: 500;
-            color: #1f2937;
-            line-height: 1.4;
-            white-space: pre-line;
-        }
-
-        .toast-close {
-            background: transparent;
-            border: none;
-            color: #9ca3af;
-            cursor: pointer;
-            font-size: 16px;
-            padding: 4px 8px;
-            border-radius: 6px;
-            transition: all 0.2s;
-            margin-left: 12px;
-            flex-shrink: 0;
-        }
-
-        .toast-close:hover {
-            background: rgba(0, 0, 0, 0.05);
-            color: #4b5563;
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-
-        @keyframes slideOut {
-            from {
-                transform: translateX(0);
-                opacity: 1;
-            }
-            to {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-        }
-
-        /* Para dispositivos móviles */
         @media (max-width: 768px) {
-            .toast-notification {
-                top: 10px;
-                right: 10px;
-                left: 10px;
-                min-width: auto;
-                max-width: none;
-            }
-        }
-
-        /* ============================================ */
-        /* ESTILO PARA BOTÓN CON SPINNER */
-        /* ============================================ */
-        .btn:disabled {
-            opacity: 0.7;
-            cursor: not-allowed;
-        }
-
-        .fa-spinner {
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        /* ============================================ */
-        /* ESTILOS PARA TABLA Y CHECKBOXES */
-        /* ============================================ */
-        .table-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .btn-eliminar {
-            background-color: #dc2626;
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-        
-        .btn-eliminar:hover {
-            background-color: #b91c1c;
-        }
-        
-        .checkbox-pedido {
-            accent-color: #3b82f6;
-        }
-        
-        #selectAllCheckbox {
-            accent-color: #3b82f6;
-        }
-        
-        /* Estilos para el modal de confirmación */
-        .modal.show {
-            display: flex !important;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: rgba(0, 0, 0, 0.5);
-            z-index: 9999;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .btn-danger {
-            background-color: #dc2626;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 500;
-        }
-        
-        .btn-danger:hover:not(:disabled) {
-            background-color: #b91c1c;
-        }
-        
-        .btn-danger:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        .btn-secondary {
-            background-color: #6b7280;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 500;
-        }
-        
-        .btn-secondary:hover:not(:disabled) {
-            background-color: #4b5563;
-        }
-        
-        .btn-secondary:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
+            .toast-notification { top: 10px; right: 10px; left: 10px; min-width: auto; max-width: none; }
         }
     `;
     
     document.head.appendChild(styleElement);
-    console.log('✅ Estilos de toast y spinner inyectados correctamente');
+    console.log('✅ Estilos de pedidos inyectados correctamente');
 })();
+
+// Exportar funciones para uso global
+window.cargarPedidos = cargarPedidos;
+window.verDetallesPedido = verDetallesPedido;
+window.aprobarPedido = aprobarPedido;
+window.rechazarPedido = rechazarPedido;
+window.eliminarPedidoIndividual = eliminarPedidoIndividual;
+window.toggleModoSeleccion = toggleModoSeleccion;
+window.confirmarEliminacionSeleccionados = confirmarEliminacionSeleccionados;
+window.toggleSeleccionarTodos = toggleSeleccionarTodos;
+window.toggleSeleccionPedido = toggleSeleccionPedido;
+window.generarReporteVentasEntregadas = generarReporteVentasEntregadas;
+window.mostrarModalMotivoRechazo = mostrarModalMotivoRechazo;
+window.ejecutarBusquedaPedidos = ejecutarBusquedaPedidos;
+window.limpiarBusquedaPedidos = limpiarBusquedaPedidos;
+window.mostrarModalAsignarRepartidor = mostrarModalAsignarRepartidor;
+window.asignarPedidoARepartidor = asignarPedidoARepartidor;

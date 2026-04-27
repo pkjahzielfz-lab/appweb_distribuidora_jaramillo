@@ -235,9 +235,11 @@ function mostrarInicio() {
     });
 }
 
-// En la función cargarVista, agregar un nuevo case:
-async function cargarVista(vista) {
-    console.log('📂 Cargando vista:', vista);
+// ============================================
+// 🆕 FUNCIÓN CORREGIDA PARA CARGAR VISTAS
+// ============================================
+async function cargarVista(vista, opciones = {}) {
+    console.log('📂 Cargando vista:', vista, opciones);
     
     // Actualizar título de la página
     const pageTitle = document.getElementById('pageTitle');
@@ -249,26 +251,56 @@ async function cargarVista(vista) {
     }
     
     const content = document.getElementById('content');
-    if (content) content.innerHTML = '<div class="loader">Cargando...</div>';
     
+    // 🆕 CORRECCIÓN: Verificar si la función existe antes de llamarla
     switch(vista) {
         case 'inicio':
-            await cargarInicio();
+            if (typeof cargarInicio === 'function') {
+                await cargarInicio();
+            } else {
+                console.error('❌ Función cargarInicio no encontrada');
+                if (content) content.innerHTML = '<div style="text-align: center; padding: 50px;">Error: Función no disponible</div>';
+            }
             break;
         case 'productos':
-            await cargarProductos();
+            if (typeof cargarProductos === 'function') {
+                await cargarProductos(opciones);
+            } else {
+                console.error('❌ Función cargarProductos no encontrada');
+                if (content) content.innerHTML = '<div style="text-align: center; padding: 50px;">Error: Función no disponible</div>';
+            }
             break;
         case 'pedidos':
-            await cargarPedidos();
+            if (typeof cargarPedidos === 'function') {
+                await cargarPedidos();
+            } else {
+                console.error('❌ Función cargarPedidos no encontrada');
+                if (content) content.innerHTML = '<div style="text-align: center; padding: 50px;">Error: Función no disponible</div>';
+            }
             break;
         case 'creditos':
-            await cargarCreditos();
+            if (typeof cargarCreditos === 'function') {
+                await cargarCreditos();
+            } else {
+                console.error('❌ Función cargarCreditos no encontrada');
+                if (content) content.innerHTML = '<div style="text-align: center; padding: 50px;">Error: Función no disponible</div>';
+            }
             break;
         case 'liquidarcredito':
-            await cargarLiquidarCredito();
+            if (typeof cargarLiquidarCredito === 'function') {
+                await cargarLiquidarCredito();
+            } else {
+                console.error('❌ Función cargarLiquidarCredito no encontrada');
+                if (content) content.innerHTML = '<div style="text-align: center; padding: 50px;">Error: Función no disponible</div>';
+            }
             break;
         case 'usuarios':
-            await cargarUsuarios();
+            if (typeof cargarUsuarios === 'function') {
+                await cargarUsuarios();
+            } else {
+                console.error('❌ Función cargarUsuarios no encontrada');
+                if (content) content.innerHTML = '<div style="text-align: center; padding: 50px;">Error: Función no disponible</div>';
+            }
             break;
         default:
             console.error('Vista no encontrada:', vista);
